@@ -1,0 +1,390 @@
+---
+title: "20230430省委書記論文"
+author: "簡立宇"
+date: "2023-04-30"
+output: html_document
+---
+```{r}
+library(jiebaRD)
+library(jiebaR)
+library(NLP)
+library(tm)
+library(tidyverse)
+library(forcats)
+library(ggraph)
+library(quanteda)
+library(sjPlot)
+library(sjmisc)
+library(readr)
+library(stminsights)
+library(stm)
+library(dplyr)
+library(ggplot2)
+library(word2vec)
+library(udpipe)
+load("20230502探索.RData")
+save(Data,effects,w,out,stm_modX,file = "20230502探索.RData")
+```
+```{r}
+library(readr)
+X <- read_csv("C:/Users/user/Desktop/PyTest_VScode/PythonTEST/20230305_(已清)(去重複)2021_2022兩年省委書記講話.csv")
+View(X)
+Q <- read_csv("習近平講話.csv")
+View(Q)
+
+D <- data.frame(title = Q$title,
+                Name = "習近平",
+                Province = "總書記",
+                pubtime = Q$release_date,
+                content = Q$content
+                )
+View(D)
+X$level_0 <- NULL
+X$index <- NULL
+X$`Unnamed: 0` <- NULL
+X$DU <- NULL
+X$...1 <- NULL
+Data <- rbind(X,D)
+View(Data)
+
+
+table(Data$Name)
+w <- as.data.frame(table(Data$Name))
+View(w)
+w$num <- seq.int(1:38)
+w$Provin <- c(NA)
+Data$NameN <- c(NA)
+for(i in c(1:9253)){
+  for(u in c(1:38)){
+    if(Data$Name[i] == w$Var1[u]){
+      Data$NameN[i] <- w$num[u]
+      w$Provin[u] <- Data$Province[i]
+    }
+  }
+  
+}
+
+CO <- read_excel("C:/Users/user/Desktop/論文大綱準備/省委書記編碼.xlsx")
+View(CO)
+
+CC <- data.frame(Name = CO$姓名,
+                 Co = CO$CO)
+View(CC)
+Data$CO <- c(NA)
+for(i in c(1:9253)){
+  for(u in c(1:37)){
+    if(Data$Name[i] == CC$Name[u]){
+      Data$CO[i] <- CC$Co[u]
+
+    }
+  }
+  
+}
+for(i in c(1:9253)){
+  if(Data$Name[i] == "習近平"  ){
+    Data$CO[i] <- 1
+  }
+}
+
+
+```
+# 敘述統計繪圖
+```{r}
+
+X %>%
+    count(Name)%>%
+  ggplot(aes(x = reorder(Name, -n), y = n)) +
+  geom_bar(stat = 'identity') +ylab("篇數")+xlab("姓名")+
+  geom_text(aes(label=n), hjust=-0.8,vjust=0, size=2)+ggtitle("2021-2022年省委書記表態篇數")+coord_flip()
+
+
+X$month <-  cut(X$pubtime, breaks="months") 
+g <- as.data.frame(table(X$month))
+View(g)
+g %>% ggplot(aes(x = Var1, y = Freq)) +  geom_bar(stat = 'identity')+
+  geom_text(aes(label=Freq), hjust=-0.8,vjust=0, size=2) +ggtitle("2021-2022年省委書記表態篇數")+ylab("篇數")+xlab("時間(月)")+
+  coord_flip()
+```
+
+# 斷詞
+
+```{r}
+content <- Data$content
+content = gsub("(@|#)\\w+", " ", content) #去除@或#後有數字,字母,底線 (標記人名或hashtag)
+content = gsub("(http|https)://.*", " ", content) #去除網址(.:任意字元，*:0次以上)
+content = gsub("[ \t]{2,}", "", content) #去除兩個以上空格或tab
+content = gsub("\\n"," ",content) #去除換行
+content = gsub("\\s+"," ",content) #去除一個或多個空格(+:一次以上)
+content = gsub("^\\s+|\\s+$"," ",content) #去除開頭/結尾有一個或多個空格
+content = gsub("&.*;"," ",content) #去除html特殊字元編碼
+content = gsub("[[:digit:]]"," ",content) #去除數字
+content = gsub("[[:lower:]]"," ",content) #去除小寫英文字母
+content = gsub("[[:upper:]]"," ",content) #去除大寫英文字母
+content = gsub("[[:punct:]]"," ",content) #去除標點符號
+content = gsub("\\r", " ",content) #去除回歸鍵
+```
+
+```{r}
+cutter <- worker(bylines = TRUE, user = "dic_202203.txt", stop_word = "stop_word.txt")#, stop_word = "stop_word_all.txt"
+segcon <- segment(as.character(content), cutter)
+
+segcon_doc <- data.frame(do.call(rbind, lapply(segcon, paste0, collapse = ' ')))
+colnames(segcon_doc)[1] <- 'segcon'
+segcon_doc$segcon <- as.character(segcon_doc$segcon)
+Data$segcon <- segcon_doc$segcon
+
+View(Data)
+write.csv(Data,"20230430_論文省委書記習近平合併分詞.csv")
+```
+
+```{r}
+library(readr)
+Data <- read_csv("C:/Users/user/Desktop/2023_R與言教學/20230430_論文省委書記習近平合併分詞.csv")
+View(Data)
+```
+
+
+# STM
+```{r}
+View(Data)
+# prepare data
+library(dplyr)
+Data <- Data %>% filter(Name == "李鴻忠")
+processed <- textProcessor(Data$segcon,Data, 
+                           wordLengths = c(2,Inf))
+View(processed)
+out <-
+  prepDocuments(
+    documents = processed$documents,
+    vocab = processed$vocab,
+    meta = processed$meta
+  )
+View(out)
+
+######
+set.seed(800)
+findK <- searchK(documents = out$documents, vocab = out$vocab,prevalence = ~ NameN, K = c(10,15,20,25,30,35,40,45,50,55,60,65,70), init.type = "Spectral", data = out$meta, core = 1)
+View(findK$results)
+plot(findK)
+findK <- searchK(documents = out$documents, vocab = out$vocab,prevalence = ~ NameN, K = c(5,7,9,11,13,15,17,19), init.type = "Spectral", data = out$meta, core = 1)
+View(findK$results)
+plot(findK)
+
+
+######
+
+# fit model
+stm_modX <- stm(documents = out$documents,
+                   vocab = out$vocab,
+                   data = out$meta,
+                   prevalence = ~ NameN+s(pubtime),
+                   K = 25,
+                   max.em.its = 100, 
+                   verbose = FALSE)
+
+stm_modXC <- stm(documents = out$documents,
+                   vocab = out$vocab,
+                   data = out$meta,
+                   K = 11,
+                   max.em.its = 100,
+                   verbose = FALSE)
+
+View(stm_modX)
+plot(stm_modX, type = "summary", xlim = c(0, .3),n=10,text.cex = 0.5)
+plot(stm_modXC, type = "summary", xlim = c(0, .3),n=5,text.cex = 0.7)
+
+stm_mod_metaC <- cbind(out$meta,stm_modX$theta)
+View(stm_mod_metaC)
+colnames(stm_mod_meta)[9:33] <- paste0("Topic", colnames(stm_mod_meta)[9:33]) 
+View(stm_mod_meta)
+write.csv(stm_mod_meta,"20220503STMTopic省委書記.csv")
+```
+
+# STM-Prob/Frex/Lift/Score
+```{r}
+top <- labelTopics(stm_modX, topics = c(1:25), n = 20, frexweight = 0.5)
+top
+attach(mtcars)
+par(mfrow=c(2,2))
+plot.STM(stm_modX, n=5,xlim = c(0, .3), labeltype="prob",text.cex = 0.8, main = "Topics Prop",width = 8)
+plot.STM(stm_modX, n=5,xlim = c(0, .3), labeltype="frex", text.cex = 0.8,main = "Topics Frex",width = 8)
+plot.STM(stm_modX, n=5,xlim = c(0, .3), labeltype="lift",text.cex = 0.8, main = "Topics Lift",width = 8)
+plot.STM(stm_modX, n=5,xlim = c(0, .3), labeltype="score",text.cex = 0.8,main = "Topics Score",width = 8)
+
+```
+# STM-主題關聯性
+```{r}
+mod.out.corr <- topicCorr(stm_modXC)
+plot(mod.out.corr)
+```
+
+# 篩選STM文章
+```{r}
+e1 <- stm_mod_metaC %>% filter(stm_mod_metaC$`2` >= 0.9)
+e2 <- stm_mod_metaC %>% filter(stm_mod_metaC$`4` >= 0.9)
+ee <- rbind(e1,e2)
+View(ee)
+write.csv(e1,"李鴻忠提及防疫文章.csv")
+```
+
+# STM-estimateEffect
+
+```{r}
+stm_effects <- estimateEffect(1:25 ~NameN+s(pubtime),
+  stm_modX,
+  metadata = out$meta,
+  uncertainty = c("Global")
+)
+stm_effects2 <- estimateEffect(1:25 ~NameN,
+  stm_modX,
+  metadata = out$meta,
+  uncertainty = c("Global")
+)
+#stm_effects
+View(stm_effects2$varlist)
+
+effects <- get_effects(estimates = stm_effects2,
+                      variable = 'NameN',
+                      type = 'pointestimate')
+View(effects)
+effects$Name <- c(NA)
+for(i in c(1:950)){
+  for(u in c(1:38)){
+    if(effects$value[i] == w$num[u]){
+      effects$Name[i] <- paste0(w$Provin[u],"-", as.character(w$Var1[u]))
+    }
+  }
+  
+}
+View(w)
+write.csv(effects,"20220502省委書記topiceffect.csv")
+
+# plot effects
+effects %>% filter(topic == 8) %>%
+ggplot(aes(x = Name, y = proportion)) +
+ geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.1, size = 1) +
+ geom_point(size = 3) +ylim(c(-.025,.15))+
+ coord_flip() + theme_light() + labs(x = '姓名', y = 'Topic 8 Proportion')+ geom_hline(yintercept = 0, 
+                color = "red")+ geom_vline(xintercept = 38, 
+                color = "red")
+
+
+plot(stm_effects2, covariate="NameN", topics=c(8), model=stm_modX, 
+     method="pointestimate",cex = 0.01,xlim = c(-0.01,0.1),width = 0.1,xlab="Expected Topic Proportions",ylab="Name")
+
+
+plot.estimateEffect(stm_effects2, model=stm_modX,  covariate="NameN", topics=c(8), method="pointestimate", labeltype="custom", custom.labels=c(8),ci.level=.99, ylab="Name")
+
+```
+
+# W2V
+
+```{r}
+model_w2v <- word2vec(Data$segcon)
+View(model_w2v)
+model_w2v$
+ebd <- as.matrix(model_w2v)
+View(ebd)
+
+emb <- predict(model_w2v, c("习近平","两个确立","核心","灯塔"), type = "embedding")
+emb
+
+#獲得相近的詞彙
+nn <- predict(model_w2v,c("习近平","两个确立","核心","灯塔","掌舵"),type="nearest",top_n = 30)
+View(nn$掌舵)
+
+ggplot(nn$灯塔, aes(reorder(term2,similarity),similarity)) +ggtitle("與「灯塔」相似度高的前30個關鍵詞")+ylab("similarity")+xlab("term")+ geom_point()+coord_flip()
+
+
+
+PR <- cbind(nn$掌舵,nn$习近平)
+PR <- cbind(PR,nn$两个确立)
+PR <- cbind(PR,nn$核心)
+PR <- cbind(PR,nn$灯塔)
+View(PR)
+library("writexl")
+write_xlsx(PR,"20230504_W2V表態指標.xlsx")
+
+```
+# KWIC
+```{r}
+Data$segcon <- gsub("习近平总书记","习近平",Data$segcon)
+Data$segcon <- gsub("习近平同志","习近平",Data$segcon)
+
+tokss <- tokens(Data$segcon, what="fastestword")
+KWIC<-kwic(tokss, pattern = "习*", valuetype = "glob", window = 10)
+
+library(tibble)
+View(KWIC)
+KWIC$prekeypost<-paste(KWIC$pre,KWIC$keyword, KWIC$post, sep=" ")
+KWIC<-tibble(KWIC)
+View(KWIC)
+
+```
+
+# tf-idf
+```{r}
+library(tm)
+library(tmcn)
+
+d.corpus <- Corpus(VectorSource(Data$segcon))
+d.corpus <- tm_map(d.corpus, removeNumbers)
+tdm <- TermDocumentMatrix(d.corpus, control = list(weighting=weightTfIdf, wordLengths = c(4,Inf)))
+freq<-rowSums(as.matrix(tdm))
+tail(sort(freq), n=30) 
+
+hf<-tail(sort(freq), n=50)
+hfdf<-as.data.frame(sort(hf))
+hfdf$names<-rownames(hfdf)
+ggplot(hfdf, aes(reorder(names, hf),hf))+ geom_bar(stat="identity", fill="steelblue")+coord_flip()+theme_minimal()+xlab("Terms")+ylab("Frequency")+ggtitle("TF-IDF Scores")+theme(text=element_text(size=8))
+```
+# ETM
+
+```{r}
+pkgs <- c("torch", "topicmodels.etm", "doc2vec", "uwot")
+install.packages(pkgs)
+install.packages("ggrepel")
+install.packages("ggalt")
+library(torch)
+library(topicmodels.etm)
+library(torch)
+library(topicmodels.etm)
+library(doc2vec)
+library(word2vec)
+library(udpipe)
+library(textplot)
+
+dtm   <- strsplit.data.frame(Data,group = "Name", term = "segcon", split = " ")
+dtm   <- document_term_frequencies(dtm)
+dtm   <- document_term_matrix(dtm)
+dtm   <- dtm_remove_tfidf(dtm, prob = 0.50)
+
+vocab        <- intersect(rownames(ebd), colnames(dtm))
+embeddings   <- dtm_conform(ebd, rows = vocab)
+dtm          <- dtm_conform(dtm,     columns = vocab)
+dim(dtm)
+dim(embeddings)
+#Learn 20 topics with a 100-dimensional hyperparameter for the variational inference
+set.seed(1234)
+torch_manual_seed(4321)
+model     <- ETM(k = 25, dim = 100, embeddings = embeddings)
+#optimizer <- optim_adam(params = model$parameters, lr = 0.005, weight_decay = 0.0000012)
+#loss      <- model$fit(data = dtm, optimizer = optimizer, epoch = 20, batch_size = 1000)
+#plot(model, type = "loss")
+#model
+
+#主題關鍵詞
+terminology1  <- predict(model, type = "terms", top_n = 10)
+View(terminology[[1]])
+View(terminology[[2]])
+
+#各官員的主題XX分數
+terminology2  <- predict(model,dtm, type = "topics", top_n = 10)
+View(terminology2)
+plt <- plot(model, type = "topics", top_n = 10, which = c(1, 2, 14, 16, 18, 19),
+metric = "cosine", n_neighbors = 15,
+fast_sgd = FALSE, n_threads = 2, verbose = TRUE,
+title = "ETM Topics example")
+plt
+```
+
